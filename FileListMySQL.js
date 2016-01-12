@@ -16,8 +16,8 @@ if (!path) {
 
 var connection = mysql.createConnection({
     host     : 'x.x.x.x',
-    user     : 'root',
-    password : 'root',
+    user     : 'xxxx',
+    password : 'xxxx',
     database : 'File'
 });
 

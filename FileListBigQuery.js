@@ -40,21 +40,12 @@ var schema = {
     }
 };
 
-DeleteTable('File', 'Data').then(function () {
-    
-    logger.error('テーブルを削除しました');
-    
-    return CreateTable('File', 'Data', schema);
+var table1Name = "Data" + getCurrentTime();
 
-}).catch(function (err) {
+CreateTable('File', table1Name, schema).then(function (table) {
     
-    logger.error('テーブルの削除に失敗しました[err:' + err + ']');
-    
-    return CreateTable('File', 'Data', schema);
-
-}).then(function (table) {
-    
-    logger.error('テーブルを作成しました[table:' + JSON.stringify(table) + ']');
+    /* logger.error('テーブルを作成しました[table:' + JSON.stringify(table) + ']'); */
+    logger.info('テーブルを作成しました');
     logger.info('<-- 初期DB処理終了');
     
     fs.open(path, 'r', function (status, fd) {
@@ -67,48 +58,61 @@ DeleteTable('File', 'Data').then(function () {
             return;
         }
         
-        logger.info('データ登録開始 -->');
+        logger.info('データ登録用CSV作成開始 -->');
         logger.info('ファイルのオープン成功[path:' + path + ']');
         
-        var rows = new Array();
+        var csvPath = getCurrentTime() + ".csv";
+        fs.writeFileSync(csvPath, "ID,Sequence,Data\n", 'utf8');
+        
         var sequence = 1;
         var readableStream = fs.createReadStream(path, { highWaterMark: 1 });
         readableStream.on('data', function (data) {
             
-            rows.push({ "ID" : 1, "Sequence" : sequence++, "Data" : data.toString("hex") });
+            fs.appendFileSync(csvPath, '1,' + sequence++ + ',"' + data.toString("hex") + '"\n', 'utf8');
 
         });
         readableStream.on('end', function () {
             
-            Insert('File', 'Data', rows).then(function (result) {
+            logger.info('<-- データ登録用CSV作成終了');
+            logger.info('データ登録開始 -->');
+            
+            var metadata = {
+                allowJaggedRows: true,
+                skipLeadingRows: 1
+            };
+            
+            fs.createReadStream(csvPath).pipe(bigquery.dataset('File').table(table1Name).createWriteStream(metadata)).on('complete', function (job) {
                 
-                logger.info('<-- データ登録終了');
-                logger.info('登録されたデータからファイルを生成開始 -->');
-                
-                Query('SELECT GROUP_CONCAT(Data, "") AS File FROM ( SELECT * FROM [File.Data] ORDER BY Sequence) GROUP BY ID').then(function (result) {
-                    console.log(result);
-                    var copyPath = path + '-' + getCurrentTime();
-                    fs.writeFile(copyPath, new Buffer(result[0].File, 'hex'), function (err) {
-                        if (err) {
-                            logger.error('ファイルの生成エラー[err:' + err + ']');
-                            logger.info('<-- 登録されたデータからファイルを生成エラー終了');
-                            logger.error('<------------------ 処理エラー終了 ------------------>');
-                            return;
-                        }
+                Promise.resolve(0).then(function loop(i) {
+                    return GetJob(job.id).then(function (table) {
                         
-                        logger.info('ファイルを生成[path:' + copyPath + ']');
-                        logger.info('<-- 登録されたデータからファイルを生成終了');
-                        logger.info('<------------------ 処理終了 ------------------>');
+                        logger.info('<-- データ登録終了');
+                        logger.info('登録されたデータからファイルを生成開始 -->');
                         
-                        return;
-                    });
+                        Query('SELECT GROUP_CONCAT(Data, "") AS File FROM ( SELECT * FROM [File.' + table1Name + '] ORDER BY Sequence) GROUP BY ID').then(function (result) {
+                            console.log(result);
+                            var copyPath = path + '-' + getCurrentTime();
+                            fs.writeFile(copyPath, new Buffer(result[0].File, 'hex'), function (err) {
+                                if (err) {
+                                    logger.error('ファイルの生成エラー[err:' + err + ']');
+                                    logger.info('<-- 登録されたデータからファイルを生成エラー終了');
+                                    logger.error('<------------------ 処理エラー終了 ------------------>');
+                                    return;
+                                }
+                                
+                                logger.info('ファイルを生成[path:' + copyPath + ']');
+                                logger.info('<-- 登録されたデータからファイルを生成終了');
+                                logger.info('<------------------ 処理終了 ------------------>');
+                                
+                                return;
+                            });
+                        });
+                    
+                    
+                    }).catch(loop);
                 });
-                    
-            }).catch(function (err) {
                 
-                logger.error('<-- データ登録エラー終了');
-                logger.error('<------------------ 処理エラー終了 ------------------>');
-                    
+                
             });
         });
     });
@@ -124,6 +128,19 @@ DeleteTable('File', 'Data').then(function () {
 });
 
 /* ----------------------- 定義 ----------------------- */
+
+function GetJob(jobID) {
+    return new Promise(function (resolve, reject) {
+        bigquery.job(jobID).getMetadata(function (err, job, apiResponse) {
+            logger.info(job.status.state);
+            if (job.status.state == 'DONE')
+                resolve(job);
+            
+            Sleep(1);
+            reject(job);
+        })
+    });
+}
 
 function CreateTable(datasetName, tableName, schema) {
     return new Promise(function (resolve, reject) {
@@ -169,7 +186,7 @@ function Insert(datasetName, tableName, rows) {
 
 function Query(query) {
     return new Promise(function (resolve, reject) {
-        bigquery.query(query, function (err, rows, nextQuery) {
+        bigquery.query(query, function (err, rows) {
             if (err) {
                 logger.error('クエリ失敗[query:' + query + '][err:' + err + ']');
                 reject(err);
@@ -186,3 +203,12 @@ function getCurrentTime() {
     var dt = new Date();
     return dt.toFormat("YYYYMMDDHH24MISS");
 }
+
+function Sleep(T) {
+    var d1 = new Date().getTime();
+    var d2 = new Date().getTime();
+    while (d2 < d1 + 1000 * T) {    //T秒待つ 
+        d2 = new Date().getTime();
+    }
+    return;
+} 
